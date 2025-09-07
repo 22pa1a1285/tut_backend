@@ -2,11 +2,16 @@ const express = require('express');
 const router = express.Router();
 const Student = require('../models/Student');
 const Attendance = require('../models/Attendance'); // Import Attendance model
+const { authenticateToken } = require('../middleware/auth');
 
 // Add Student
-router.post('/', async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   try {
-    const student = new Student(req.body);
+    const studentData = {
+      ...req.body,
+      userId: req.user._id
+    };
+    const student = new Student(studentData);
     await student.save();
     res.status(201).json({ message: 'Student added successfully!' });
   } catch (err) {
@@ -15,9 +20,15 @@ router.post('/', async (req, res) => {
 });
 
 // (Optional) Get all students
-router.get('/', async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const students = await Student.find();
+    // Handle both new data (with userId) and legacy data (without userId)
+    const students = await Student.find({ 
+      $or: [
+        { userId: req.user._id },
+        { userId: { $exists: false } } // Legacy data without userId
+      ]
+    });
     res.json(students);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching students', error: err });
@@ -25,16 +36,23 @@ router.get('/', async (req, res) => {
 });
 
 // Get students by class
-router.get('/by-class', async (req, res) => {
+router.get('/by-class', authenticateToken, async (req, res) => {
   try {
     const classQuery = req.query.class;
     let students;
+    const baseQuery = { 
+      $or: [
+        { userId: req.user._id },
+        { userId: { $exists: false } } // Legacy data without userId
+      ]
+    };
+    
     if (classQuery === '1-5') {
-      students = await Student.find({ class: { $in: ['1', '2', '3', '4', '5'] } });
+      students = await Student.find({ ...baseQuery, class: { $in: ['1', '2', '3', '4', '5'] } });
     } else if (classQuery) {
-      students = await Student.find({ class: classQuery });
+      students = await Student.find({ ...baseQuery, class: classQuery });
     } else {
-      students = await Student.find();
+      students = await Student.find(baseQuery);
     }
     res.json(students);
   } catch (err) {
@@ -43,9 +61,14 @@ router.get('/by-class', async (req, res) => {
 });
 
 // Get all students with fees
-router.get('/fees', async (req, res) => {
+router.get('/fees', authenticateToken, async (req, res) => {
   try {
-    const students = await Student.find();
+    const students = await Student.find({ 
+      $or: [
+        { userId: req.user._id },
+        { userId: { $exists: false } } // Legacy data without userId
+      ]
+    });
     res.json(students);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching students with fees', error: err });
@@ -53,11 +76,11 @@ router.get('/fees', async (req, res) => {
 });
 
 // Update a student's fees
-router.put('/:id/fees', async (req, res) => {
+router.put('/:id/fees', authenticateToken, async (req, res) => {
   try {
     const { fees } = req.body;
-    const student = await Student.findByIdAndUpdate(
-      req.params.id,
+    const student = await Student.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
       { fees },
       { new: true, runValidators: true }
     );
@@ -69,9 +92,14 @@ router.put('/:id/fees', async (req, res) => {
 });
 
 // Get all class 10 students
-router.get('/class-10', async (req, res) => {
+router.get('/class-10', authenticateToken, async (req, res) => {
   try {
-    const students = await Student.find({ class: '10' });
+    const students = await Student.find({ 
+      $or: [
+        { userId: req.user._id, class: '10' },
+        { userId: { $exists: false }, class: '10' } // Legacy data without userId
+      ]
+    });
     res.json(students);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching class 10 students', error: err });
@@ -79,13 +107,13 @@ router.get('/class-10', async (req, res) => {
 });
 
 // Post attendance for all students and store attendance for every student
-router.post('/attendance', async (req, res) => {
+router.post('/attendance', authenticateToken, async (req, res) => {
   try {
     const { date, attendance } = req.body; // attendance: [{ studentId, status }]
     await Promise.all(attendance.map(async (a) => {
       await Attendance.findOneAndUpdate(
-        { date, studentId: a.studentId },
-        { status: a.status },
+        { date, studentId: a.studentId, userId: req.user._id },
+        { status: a.status, userId: req.user._id },
         { upsert: true, new: true }
       );
     }));
@@ -96,9 +124,9 @@ router.post('/attendance', async (req, res) => {
 });
 
 // Get all attendance records for all students
-router.get('/attendance-records', async (req, res) => {
+router.get('/attendance-records', authenticateToken, async (req, res) => {
   try {
-    const records = await Attendance.find({});
+    const records = await Attendance.find({ userId: req.user._id });
     res.json(records);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching attendance records', error: err });
@@ -106,9 +134,9 @@ router.get('/attendance-records', async (req, res) => {
 });
 
 // Get student by id
-router.get('/:id', async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const student = await Student.findById(req.params.id);
+    const student = await Student.findOne({ _id: req.params.id, userId: req.user._id });
     if (!student) return res.status(404).json({ message: 'Student not found' });
     res.json(student);
   } catch (err) {
@@ -117,9 +145,13 @@ router.get('/:id', async (req, res) => {
 });
 
 // Update student by id
-router.put('/:id', async (req, res) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
-    const student = await Student.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const student = await Student.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id }, 
+      req.body, 
+      { new: true, runValidators: true }
+    );
     if (!student) return res.status(404).json({ message: 'Student not found' });
     res.json({ message: 'Student updated successfully!' });
   } catch (err) {
@@ -128,9 +160,9 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete student by id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const student = await Student.findByIdAndDelete(req.params.id);
+    const student = await Student.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
     if (!student) return res.status(404).json({ message: 'Student not found' });
     res.json({ message: 'Student deleted successfully!' });
   } catch (err) {
